@@ -2,24 +2,6 @@
 
 Created with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
 
-## Getting Started
-
-To build the place from scratch, use:
-
-```bash
-rojo build -o "combatTest.rbxlx"
-```
-
-Next, open `combatTest.rbxlx` in Roblox Studio and start the Rojo server:
-
-```bash
-rojo serve
-```
-
-For more help, check out [the Rojo documentation](https://rojo.space/docs).
-
----
-
 # Combat System
 
 > A server-authoritative combat system with M1 combos, blocking/posture, Black Flash, dashing, knockback, wall daze, and NPC support.
