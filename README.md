@@ -4,7 +4,7 @@ Created with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
 
 # Combat System
 
-> A server-authoritative combat system with M1 combos, blocking/posture, Black Flash, dashing, knockback, wall daze, and NPC support.
+> A server-authoritative combat system with M1 combos, blocking/posture, Black Flash, Divergent Fist, dashing, knockback, wall daze, and NPC support.
 
 ## Table of Contents
 
@@ -15,6 +15,7 @@ Created with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
   - [MainCombat.server.luau](#maincombatserverluau)
   - [m1System.luau](#m1systemluau)
   - [blackFlashSystem.luau](#blackflashsystemluau)
+  - [divergentFistSystem.luau](#divergentfistsystemluau)
   - [Remotes.luau](#remotesluau)
   - [HitboxDebug.luau](#hitboxdebugluau)
   - [npcController.luau](#npccontrollerluau)
@@ -55,6 +56,7 @@ Remotes flow **server → client** for broadcasts and feedback, and **client →
 | <kbd>F</kbd> (hold) | Block |
 | <kbd>Q</kbd> | Dash |
 | <kbd>1</kbd> | Black Flash |
+| <kbd>2</kbd> | Divergent Fist (buff) |
 
 ---
 
@@ -83,6 +85,8 @@ All tunable values live in `src/shared/CombatConfig.luau`. Both server and clien
 14. Punch Aura
 15. Camera
 16. Black Flash
+17. Shift Lock Visual (stub)
+18. Divergent Fist
 
 </details>
 
@@ -113,7 +117,9 @@ Core M1 system.
 
 **`request(player)`** — Validates all gates (blocking, guard broken, stunned, hitslow, endlag, per-hit cooldown, anti-duplicate threshold, blocked punch penalty, `nextStringAvailableTime`), advances the combo index, applies endlag, and broadcasts to all clients for animation. For NPCs it also runs a server-side hitbox scan directly.
 
-**`validateClientHit(player, payload)`** — Processes client-reported hit lists: verifies punch index matches active punch, checks time window, validates range, applies block detection with back-hit bypass, post-dash stun/damage modifiers, `State.registerHit` debounce, HP damage, posture updates, hitstun, knockback, and hit feedback remotes.
+**`validateClientHit(player, payload)`** — Processes client-reported hit lists: verifies punch index matches `activePunchIndex` (not `comboIndex` — the combo can advance before a hit report arrives), checks time window, validates range, applies block detection with back-hit bypass, post-dash stun/damage modifiers, `State.registerHit` debounce, HP damage, posture updates, hitstun, knockback, and hit feedback remotes.
+
+If **Divergent Fist** is active when an unblocked M1 hit lands, a delayed follow-up strike is scheduled with a random delay of **1.5–4 seconds** (`math.random(150, 400) / 100`). The delayed hit: pierces block, deals `DIVERGENT_FIST_DAMAGE`, applies `HITSTUN_TIME` hitslow, applies `lightKnockback`, fires `Combat_HitFeedback` type `"DivergentFistDelayed"`.
 
 ### `combat/blackFlashSystem.luau`
 
@@ -121,9 +127,40 @@ Special move (<kbd>1</kbd>). Validates the same gates as M1 plus its own per-pla
 
 | Target state | Damage | Knockback | Posture | Hitstun/Stagger |
 | :--- | :---: | :---: | :---: | :---: |
-| Unblocked | Full | ✓ | +30 | ✓ |
+| Unblocked | `BLACK_FLASH_DAMAGE` | ✓ | — | ✓ |
+| Unblocked + DF active | `BLACK_FLASH_DAMAGE + 5` | ✓ | — | ✓ |
 | Blocked (front) | None | ✗ | +30 | ✓ |
-| Blocked (back-hit bypass) | Full | ✓ | +30 | ✓ |
+| Blocked (back-hit bypass) | `BLACK_FLASH_DAMAGE` | ✓ | — | ✓ |
+
+> [!NOTE]
+> Posture gain only applies on blocked hits. Neutral targets hit by Black Flash do not gain posture.
+
+**DF+BF interaction:** If Divergent Fist is active when Black Flash lands (unblocked), +5 bonus damage is added and `DivFist = true` is included in the `Combat_HitFeedback` payload. The client uses this flag to spawn `cursedEnergy` on the punching arm and play an extra sound.
+
+**Server prints:**
+- `[BlackFlash] attacker -> target | dmg: X`
+- `[BlackFlash+DF] attacker -> target | dmg: X (base: Y + DF bonus: 5)`
+- `[BlackFlash] BLOCKED — attacker -> target`
+
+### `combat/divergentFistSystem.luau`
+
+5-second buff (<kbd>2</kbd>). Cannot stack — activating while buff is active does nothing. Validates the same gates as M1 before granting.
+
+When active:
+- Fires `Combat_DivergentFistBroadcast` to all clients (triggers teal knuckle glow + arm aura)
+- Any **unblocked** M1 hit schedules a delayed strike at a **random 1.5–4s delay**: `DIVERGENT_FIST_DAMAGE` damage, `HITSTUN_TIME` hitslow, `lightKnockback`, fires `Combat_HitFeedback` type `"DivergentFistDelayed"`
+- If Black Flash also lands while active: +5 BF damage, `cursedEnergy` burst on punching arm client-side
+
+**Server prints:**
+- `[DivergentFist] Delayed hit scheduled on <target> in X.XXs | dmg: Y`
+- `[DivergentFist] Delayed hit LANDED on <target> | dmg: Y`
+
+| Function | Description |
+| :--- | :--- |
+| `request(attacker)` | Activate buff if all gates pass and buff not already active |
+| `isActive(attacker)` | Returns true if buff is currently active (auto-expires stale entries) |
+| `resetCooldown(attacker)` | Reset buff cooldown |
+| `cleanup(attacker)` | Remove buff state on player leave |
 
 ### `combat/Remotes.luau`
 
@@ -225,7 +262,7 @@ Guard pressure bar (0 → `POSTURE_MAX`). A background loop runs passive linear 
 | Function | Description |
 | :--- | :--- |
 | `applyBlockedHit(char)` | +`POSTURE_BLOCK_GAIN` (10); triggers guard break at max |
-| `applyCustomGain(char, amount)` | Fixed gain (Black Flash uses +30) |
+| `applyCustomGain(char, amount)` | Fixed gain — Black Flash uses +30, **blocked hits only** |
 | `applyHitReduction(char)` | −`POSTURE_HIT_REDUCTION` (5) on unblocked hits |
 | `trySetBlocking(attacker, bool)` | Set block with rate limiting and suppression checks |
 | `applyGuardBreak(char, context)` | Full guard break: clears block, applies stun + stagger + movement lock, schedules recovery, fires feedback remotes |
@@ -255,7 +292,7 @@ Server-side dash execution. Validates state gates and `dashCDUntil` from `Cooldo
 Knockback impulse application.
 
 - `finisherKnockback` — Used for NPC targets only; player targets receive knockback via `Combat_Knockback` remote fired to their client.
-- `lightKnockback` — Intentionally empty (removed).
+- `lightKnockback` — Applied on unblocked M1 hits and Divergent Fist delayed hits.
 - Internal `applyKnockback` handles direction calculation, minimum separation enforcement, and method dispatch (BodyVelocity vs AssemblyLinearVelocity).
 
 ### `combat/modules/BVPool.luau`
@@ -300,8 +337,8 @@ Cooldown names: `"blackFlash"`, `"dash"`, `"dashEndlag"`.
 
 ## Server — Utility Scripts
 
-> [!TIP]
-> These scripts are placed **inside Parts in the workspace**. Each Part's `Touched` event drives the behavior.
+> [!IMPORTANT]
+> These scripts use **CollectionService tags** — they are placed in `ServerScriptService` and find their Parts via tags, not `script.Parent`. Tag the relevant Parts in Studio.
 
 ### `FastCooldowns.server.luau`
 
@@ -309,17 +346,26 @@ Touch toggles all combat CDs between 0.5s and their Config defaults. Syncs to cl
 
 ### `CooldownRefresh.server.luau`
 
+**Tag:** `CooldownRefreshZone`
+
 Touch resets all active cooldowns for the touching player only (BF `lastUsed`, `dashCDUntil`). Fires `Combat_CooldownReset` to that client so the HUD and `lastLocalUseTime` also clear instantly.
 
-### `FullHeal.server.luau`
-
-Touch restores the player to full health. 1-second per-player debounce.
+**Print:** `[CooldownRefresh] All cooldowns reset for <player>`
 
 ### `Immortality.server.luau`
 
-Touch toggles invulnerability. While active, hooks `HealthChanged` to immediately restore HP to max. Cleans up the connection on `PlayerRemoving`.
+**Tag:** `ImmortalityZone`
+
+Touch **toggles** invulnerability. On activation: immediately heals to full HP, then hooks `HealthChanged` to restore HP to max whenever it drops. On deactivation: removes `Invulnerable` attribute and disconnects the heal hook. Cleans up on `PlayerRemoving`.
+
+**Prints:**
+- `[Immortality] ON — <player>`
+- `[FullHeal] <player> healed <N> HP` (only if missing HP > 0)
+- `[Immortality] OFF — <player>`
 
 ### `InvulnZone.server.luau`
+
+**Tag:** `InvulnZone`
 
 Touch sets or clears the `Invulnerable` attribute based on the Part's `InvulnGive` attribute.
 
@@ -327,6 +373,10 @@ Touch sets or clears the `Invulnerable` attribute based on the Part's `InvulnGiv
 | :---: | :--- |
 | `true` | Grants `Invulnerable` on touch |
 | absent / `false` | Removes `Invulnerable` on touch |
+
+**Prints:**
+- `[InvulnZone] Invulnerable GIVEN to <player>`
+- `[InvulnZone] Invulnerable REMOVED from <player>`
 
 ### `WallDazeMarker.server.luau`
 
@@ -352,8 +402,35 @@ Press-<kbd>1</kbd> special move client handler.
 
 - **Input:** Same gates as server (blocking, stunned, guardbroken, endlag, hitslow) plus client-side cooldown via `ClientCooldowns`. Fires `Combat_BlackFlash`.
 - **`Combat_BlackFlashBroadcast`** — Advances arm cycle (alternates Right/Left), plays animation at reduced speed, starts black/red arm aura via `VisualAura.startBlackFlash`.
-- **`Combat_HitFeedback` (BlackFlash)** — Cancels arm aura, plays hit sound, shows black hit aura on target, plays B&W screen flash for local attacker, plays heavy reaction on target.
+- **`Combat_HitFeedback` (BlackFlash):**
+  - Cancels arm aura
+  - Plays hit sound (blocked uses block sound)
+  - Shows black hit aura on target
+  - Triggers **three-phase screen flash** for local attacker: red (0.06s) → white (0.06s) → black (0.06s) — snaps between each, no tweening
+  - Spawns **LightningBolt cone effect**: 8 bolts (+ 8 overlapping) in a cone from the target's torso toward the attacker; red+black overlapping pairs, random sizes, lingering ~0.5–0.9s then fading over 0.8s
+  - If `DivFist = true` (DF+BF combo): spawns `cursedEnergy` attachment on punching arm + plays DF+BF sound
+  - Plays heavy reaction animation on target (slot 4)
 - **`Combat_CooldownReset`** — Resets `lastLocalUseTime`.
+
+**Lighting requirements** (create in Lighting in Studio):
+- `whiteFlash` — `ColorCorrectionEffect`, high brightness
+- `blackFlash` — `ColorCorrectionEffect`, `Brightness = -1`
+- `redFlash` — `ColorCorrectionEffect`, high saturation + red tint
+
+### `divergentFistClient.client.luau`
+
+<kbd>2</kbd>-key buff client handler.
+
+- **Input:** Same gates as server plus local `buffActive` guard. Fires `Combat_DivergentFist`.
+- **`Combat_DivergentFistBroadcast`** — Calls `VisualAura.startDivergentFist`, spawns persistent `potential` attachment (idle knuckle glow) on both fists for the buff duration.
+- **`Combat_PunchBroadcast`** — If DF active: emits `cursedEnergy` attachment on the punching arm (suppresses the knuckle glow during the burst, restores after).
+- **`Combat_HitFeedback` (DivergentFistDelayed)** — Shows teal `startHit` aura + plays impact sound on delayed hit.
+
+**Attachment roles:**
+| Attachment | Role |
+| :--- | :--- |
+| `potential` (ReplicatedStorage) | Idle knuckle glow while DF buff active |
+| `cursedEnergy` (ReplicatedStorage) | Per-punch burst on lower arm |
 
 ### `postureClient.client.luau`
 
@@ -369,12 +446,13 @@ Press-<kbd>1</kbd> special move client handler.
 
 ### `CooldownHUD.client.luau`
 
-HUD slots for Dash [<kbd>Q</kbd>] and Black Flash [<kbd>1</kbd>], anchored bottom-center of screen.
+Three slots anchored bottom-center of screen: **Dash** [<kbd>Q</kbd>], **Black Flash** [<kbd>1</kbd>], **Div Fist** [<kbd>2</kbd>].
 
-- Dims + shows countdown while on cooldown.
-- Lights up when ready; plays green pulse animation on cooldown expiry.
-- Red reject flash when input is attempted while on cooldown.
-- `Combat_CooldownReset` clears both slots and `lastDashTrigger`.
+**Cooldown slots** (Dash, Black Flash): dim + countdown while on CD; lights up + green pulse on expiry; red reject flash when pressed while on CD.
+
+**Buff slot** (Div Fist): teal highlight + countdown while the buff is active; teal pulse on expiry; red reject flash when pressed while buff is already active.
+
+`Combat_CooldownReset` clears all three slots and `lastDashTrigger`.
 
 ### `ClientCooldowns.luau`
 
@@ -423,6 +501,8 @@ Purely visual — manages `Highlight` instance lifecycle for hit flashes and arm
 | `startPunchLimb(attacker, punchIndex, params?)` | Per-arm highlight during active punch; alternates R/L by combo index |
 | `startBlackFlash(attacker, side?)` | Black fill + red outline arm aura; auto-expires after `BLACK_FLASH_ARM_AURA_HOLD` |
 | `cancelBlackFlash(attacker)` | Immediately remove arm aura on hit |
+| `startDivergentFist(attacker, duration)` | Register teal aura state for DF buff duration |
+| `isDivergentFistActive(attacker)` | Query if DF buff aura is active |
 | `cancelHit(model)` | Force-disable the hit aura |
 | `cancelPunchLimb(attacker)` | Disable all limb highlights |
 | `clearAllFor(model)` | Destroy all aura state for a model |
@@ -437,6 +517,7 @@ Purely visual — manages `Highlight` instance lifecycle for hit flashes and arm
 | Invulnerable | Yellow (`HIT_AURA_COLOR_INVULNERABLE`) |
 | Black Flash hit | Black |
 | Wall hit | Guard break color (red) |
+| Divergent Fist delayed hit | Teal (`DIVERGENT_FIST_AURA_COLOR`) |
 
 ### `knockbackClient.client.luau`
 
@@ -463,11 +544,13 @@ All created and ensured by `combat/Remotes.luau`.
 | `Combat_HitReport` | C → S | Report client hitbox scan results |
 | `Combat_Dash` | C → S | Request dash (Vector3 direction) |
 | `Combat_BlackFlash` | C → S | Request Black Flash |
+| `Combat_DivergentFist` | C → S | Request Divergent Fist buff activation |
 | `Combat_PunchBroadcast` | S → All | Notify all clients of a punch (attacker, index, debug info) |
-| `Combat_HitFeedback` | S → All | Hit result for visual/audio feedback (type, target, attacker) |
+| `Combat_HitFeedback` | S → All | Hit result for visual/audio feedback (type, target, attacker, blocked, divFist) |
 | `Combat_Reaction` | S → All | Force reaction animation on a target |
 | `Combat_Knockback` | S → Target | Send knockback velocity vector to target's client |
 | `Combat_BlackFlashBroadcast` | S → All | Notify all clients of a Black Flash windup |
+| `Combat_DivergentFistBroadcast` | S → All | Notify all clients that DF buff is active (attacker, duration, silent?) |
 | `Combat_CooldownSync` | S → All/One | Push current cooldown durations to clients |
 | `Combat_CooldownReset` | S → One/All | Reset all active client-side cooldown timers |
 
