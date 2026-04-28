@@ -1,4 +1,4 @@
-# combatTest
+# sorceryFight
 
 Made with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
 
