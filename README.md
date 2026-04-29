@@ -1,12 +1,12 @@
-# sorceryFight
+# Sorcery Fight
 
-Made with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
+Built with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
 
 ---
 
 # Combat System
 
-> A server-authoritative combat system with M1 combos, blocking/posture, Black Flash, Divergent Fist, dashing, knockback, wall daze, spell profiles, and NPC support.
+> A server-authoritative combat system with M1 combos, blocking/posture, Black Flash, Divergent Fist, dashing, knockback, wall daze, spell profiles (Death Curse, Disarm, Chain, Combo Spell), and NPC support.
 
 ## Table of Contents
 
@@ -20,6 +20,7 @@ Made with [Rojo](https://github.com/rojo-rbx/rojo) 7.5.1.
   - [Death Curse (Wizard Beam)](#death-curse-wizard-beam)
   - [Disarm Spell](#disarm-spell)
   - [Chain](#chain)
+  - [Combo Spell](#combo-spell)
   - [Posture / Block](#posture--block)
   - [Knockback](#knockback)
   - [Charge Orb VFX](#charge-orb-vfx)
@@ -74,6 +75,7 @@ All tunable values. Both server and client read from it via `rawget` to avoid tr
 16. Black Flash
 17. Shift Lock Visual (stub)
 18. Divergent Fist
+19. Spellslinger (Death Curse, Disarm Spell, Chain, Combo Spell)
 
 </details>
 
@@ -147,7 +149,7 @@ Special move. Validates the same gates as M1 plus its own `lastUsed` timestamp a
 
 #### Client — `blackFlashClient.client.luau`
 
-- **Input:** Client-side gates + `ClientCooldowns` guard. Fires `Combat_BlackFlash`.
+- **Input:** Client-side gates + `ClientCooldowns.isReady("blackFlash")` guard. Fires `Combat_BlackFlash`.
 - **`Combat_BlackFlashBroadcast`** — Advances arm cycle, plays animation at reduced speed, starts black/red arm aura via `VisualAura.startBlackFlash`.
 - **`Combat_HitFeedback` (BlackFlash):**
   - Cancels arm aura
@@ -157,7 +159,7 @@ Special move. Validates the same gates as M1 plus its own `lastUsed` timestamp a
   - **LightningBolt cone**: 8 bolts (+ 8 overlapping) from target torso toward attacker; red+black pairs, lingers 0.5–0.9s then fades
   - If `DivFist = true`: spawns `cursedEnergy` on punching arm + plays DF+BF combo sound
   - **Multi-hit dedup:** `lastBFVfxTime` table; if the same attacker hits a second target within 0.1s, heavy VFX are skipped for the duplicate
-- **`Combat_CooldownReset`** — Resets `lastLocalUseTime`.
+- **`Combat_CooldownReset`** — Resets local cooldown state via `ClientCooldowns.resetAll()`.
 
 > **Lighting required in Studio:** `whiteFlash` (ColorCorrectionEffect), `blackFlash` (Brightness −1), `redFlash` (high saturation + red tint).
 
@@ -217,43 +219,47 @@ Vertical yellow fill bar in a `BillboardGui` above the local player's head. Appe
 
 ### Death Curse (Wizard Beam)
 
-**Server:** `server/combat/wizardSystem.luau` · **Client:** `client/combat/wizardClient.client.luau`
+**Server:** `server/combat/wizardSystem.luau` · **Client:** `client/combat/spellslinger/wizardClient.client.luau`
 
 #### Server — `wizardSystem.luau`
 
-Tracking instant-kill lightning beam. Server finds the closest living target (players + NPCs) within `WIZARD_BEAM_RANGE` studs horizontally. Fires `Combat_CooldownSync` before the target check — cooldown starts regardless of hit or miss. If no target, spell dissipates silently.
+Tracking instant-kill lightning beam. Server finds the closest living target (players + NPCs) within `DEATH_CURSE_RANGE` studs horizontally. Fires `Combat_CooldownSync` before the target check — cooldown starts regardless of hit or miss. If no target, spell dissipates silently. Cooldown duration read from `CooldownManager.get("deathCurse")`.
 
-On hit: `hum:TakeDamage(10000)` (instant kill). If target is blocking, damage is skipped. Fires `Combat_HitFeedback` and `Combat_WizardBeamBroadcast` to all clients.
+On hit: `hum:TakeDamage(10000)` (instant kill). If target is blocking, damage is skipped. Fires `Combat_HitFeedback` and `Combat_DeathCurseBroadcast` to all clients.
 
 | Function | Description |
 | :--- | :--- |
 | `fire(player, _, lockedOrigin)` | Full validation + target search + damage |
-| `cleanup(player)` | Clear cooldown entry on leave |
+| `resetCooldown(player)` | Clear cooldown entry |
+| `cleanup(player)` | Remove state on leave |
 
 #### Client — `wizardClient.client.luau`
 
-- **Input:** Gates + `lastFireTime` guard. Starts `SpellCharge.begin` (green orb, `WIZARD_BEAM_CHARGE_TIME`). Fires `Combat_WizardBeamFire` after charge.
-- **`Combat_WizardBeamBroadcast`** — Renders a triple-layered green `LightningBolt` between cast origin and target.
-- **`Combat_HitFeedback` (WizardBeam)** — Draws a green lightning X across the target's body; plays hit sound; green `VisualAura` hit flash.
+- **Input:** Gates + `ClientCooldowns.isReady("deathCurse")`. Starts `SpellCharge.begin` (green orb, `ClientCooldowns.get("deathCurseCharge")`). Fires `Combat_DeathCurseFire` after charge.
+- **`Combat_DeathCurseBroadcast`** — Renders a triple-layered green `LightningBolt` between cast origin and target.
+- **`Combat_HitFeedback` (DeathCurse)** — Draws a green lightning X across the target's body; plays hit sound; green `VisualAura` hit flash.
 
 ---
 
 ### Disarm Spell
 
-**Server:** `server/combat/disarmSystem.luau` · **Client:** `client/combat/disarmClient.client.luau`
+**Server:** `server/combat/disarmSystem.luau` · **Client:** `client/combat/spellslinger/disarmClient.client.luau`
 
 #### Server — `disarmSystem.luau`
 
-Tracking beam that sets `Disarmed = true` on the target for `DISARM_SPELL_DURATION` seconds, blocking all special moves. Same charge-then-fire flow as Wizard Beam. Fires `Combat_CooldownSync` before target check.
+Tracking beam that sets `Disarmed = true` on the target for `DISARM_SPELL_DURATION` seconds, blocking all special moves. Same charge-then-fire flow as Death Curse. Fires `Combat_CooldownSync` before target check. Cooldown duration read from `CooldownManager.get("disarmSpell")`.
 
 | Function | Description |
 | :--- | :--- |
 | `fire(player, _, lockedOrigin)` | Validation + target search + disarm |
-| `cleanup(player)` | Clear cooldown entry on leave |
+| `isReady(player)` | Returns true if cooldown has expired |
+| `setCooldown(player, untilTime)` | Set cooldown end timestamp directly (used by Combo Spell) |
+| `resetCooldown(player)` | Zero the cooldown entry |
+| `cleanup(player)` | Remove state on leave |
 
 #### Client — `disarmClient.client.luau`
 
-- **Input:** Gates + `lastFireTime` guard. Starts `SpellCharge.begin` (red orb, `DISARM_SPELL_CHARGE_TIME`). Fires `Combat_DisarmSpellFire` after charge.
+- **Input:** Gates + `ClientCooldowns.isReady("disarmSpell")`. Starts `SpellCharge.begin` (red orb, `ClientCooldowns.get("disarmSpellCharge")`). Fires `Combat_DisarmSpellFire` after charge.
 - **`Combat_DisarmSpellBroadcast`** — Renders a triple-layered red `LightningBolt`.
 - **`Combat_HitFeedback` (DisarmSpell)** — Spawns a red orbiting lightning ring around the target's HRP for the disarm duration. Plays hit sound.
 
@@ -261,23 +267,56 @@ Tracking beam that sets `Disarmed = true` on the target for `DISARM_SPELL_DURATI
 
 ### Chain
 
-**Server:** `server/combat/chainSystem.luau` · **Client:** `client/combat/chainClient.client.luau`
+**Server:** `server/combat/chainSystem.luau` · **Client:** `client/combat/spellslinger/chainClient.client.luau`
 
 #### Server — `chainSystem.luau`
 
-Beam that locks the target's movement and bounces to nearby targets. On hit: sets `Chained = true`, sets `WalkSpeed = 0` for `CHAIN_DURATION` seconds. `propagateChain` then runs every `CHAIN_BOUNCE_INTERVAL` seconds, picking a random unchained living target within `CHAIN_BOUNCE_RADIUS` of the current victim and applying the chain to them. Fires `Combat_CooldownSync` before target check.
+Beam that locks the target's movement and bounces to nearby targets. On hit: sets `Chained = true`, sets `WalkSpeed = 0` for `CHAIN_DURATION` seconds. `propagateChain` then runs every `CHAIN_BOUNCE_INTERVAL` seconds, picking a random unchained living target within `CHAIN_BOUNCE_RADIUS` of the current victim and applying the chain to them. Caps at `MAX_CHAIN_BOUNCES = 10`. Fires `Combat_CooldownSync` before target check. Cooldown duration read from `CooldownManager.get("chain")`.
 
 | Function | Description |
 | :--- | :--- |
 | `fire(player, _, lockedOrigin)` | Validation + target search + chain + bounce |
-| `cleanup(player)` | Clear cooldown entry on leave |
+| `isReady(player)` | Returns true if cooldown has expired |
+| `setCooldown(player, untilTime)` | Set cooldown end timestamp directly (used by Combo Spell) |
+| `resetCooldown(player)` | Zero the cooldown entry |
+| `cleanup(player)` | Remove state on leave |
 
 #### Client — `chainClient.client.luau`
 
-- **Input:** Gates + `lastFireTime` guard. Starts `SpellCharge.begin` (blue orb, `CHAIN_CHARGE_TIME`). Fires `Combat_ChainFire` after charge.
+- **Input:** Gates + `ClientCooldowns.isReady("chain")`. Starts `SpellCharge.begin` (blue orb, `ClientCooldowns.get("chainCharge")`). Fires `Combat_ChainFire` after charge.
 - **`Combat_ChainBroadcast`** — Renders a triple-layered blue `LightningBolt` from cast origin to first target.
 - **`Combat_HitFeedback` (Chain)** — Spawns a blue orbiting lightning ring around the chained target for the chain duration. Plays hit sound.
 - **`Combat_HitFeedback` (ChainBounce)** — Renders a bounce beam from the previous victim to the new target + spawns swirl on new target.
+
+---
+
+### Combo Spell
+
+**Server:** `server/combat/comboSpellSystem.luau` · **Client:** `client/combat/spellslinger/comboSpellClient.client.luau`
+
+The Combo Spell fires when Disarm and Chain are pressed within `COMBO_SPELL_WINDOW` seconds of each other. It cancels both individual charges and fires a single larger purple orb. On hit it roots and disarms every target, then bounces infinitely (capped at 30 real-time seconds) between nearby victims dealing `COMBO_SPELL_DAMAGE` per hop.
+
+#### Server — `comboSpellSystem.luau`
+
+Gates: standard state checks + `comboCooldownEnds` + `DisarmSystem.isReady` + `ChainSystem.isReady`. Fires `Combat_CooldownSync` with `{ disarmSpell, chain, comboSpell }` before the target check so all three cooldowns advance together. Cooldown duration from `CooldownManager.get("comboSpell")`.
+
+On hit: `applyComboHit` sets `Chained = true`, `Disarmed = true`, `WalkSpeed = 0` on the target for `COMBO_SPELL_DURATION` seconds. `propagateCombo` then bounces every `COMBO_SPELL_BOUNCE_INTERVAL` seconds to a random unchained living target within `COMBO_SPELL_BOUNCE_RADIUS`.
+
+| Function | Description |
+| :--- | :--- |
+| `fire(player, _, lockedOrigin)` | Full validation + target search + hit + propagate |
+| `resetCooldown(player)` | Zero combo, disarm, and chain cooldowns |
+| `cleanup(player)` | Remove state on leave |
+
+#### Client — `comboSpellClient.client.luau`
+
+- **Combo detection:** `InputBegan` records timestamps for disarm and chain keys. If both are pressed within `COMBO_SPELL_WINDOW` and both individual cooldowns have expired (`ClientCooldowns.getRemaining > 0` check on expiry only, not pending), a combo charge begins.
+- **Charge:** Sets `ComboPending` attribute on character (signals disarm/chain `SpellCharge` instances to cancel silently). Spawns a larger purple orb (2→8 studs over `ClientCooldowns.get("comboSpellCharge")`). Generation counter prevents stale fires.
+- **Cancel:** Stunned / guard-broken attribute changes abort the charge.
+- **Fire:** `clearPending("comboSpell")` → `Combat_ComboSpellFire:FireServer` → `startCooldown("comboSpell", comboCooldown)`.
+- **`Combat_ComboSpellBroadcast`** — Renders the initial triple-layered purple `LightningBolt` from cast origin to first target.
+- **`Combat_HitFeedback` (ComboSpell)** — Spawns a dual-ring CW+CCW purple swirl around the target for `COMBO_SPELL_DURATION` seconds. Plays hit sound.
+- **`Combat_HitFeedback` (ComboSpellBounce)** — Renders a bounce beam from source to target + spawns swirl on new target.
 
 ---
 
@@ -328,7 +367,7 @@ Listens on `Combat_Knockback`. Creates a `BodyVelocity` with the server-sent vel
 
 ### Charge Orb VFX
 
-**Server relay:** `MainCombat` (`Combat_ChargeOrbFire` handler) · **Client (local):** `client/combat/SpellCharge.luau` · **Client (remote):** `client/combat/chargeOrbClient.client.luau`
+**Server relay:** `MainCombat` (`Combat_ChargeOrbFire` handler) · **Client (local):** `client/combat/modules/SpellCharge.luau` · **Client (remote):** `client/combat/chargeOrbClient.client.luau`
 
 #### Client — `SpellCharge.luau`
 
@@ -336,9 +375,9 @@ Shared charge-then-fire lifecycle used by all spell clients (Death Curse, Disarm
 
 - Spawns a local neon orb that grows from 0.5→2.5 studs over `chargeTime`
 - Fires `Combat_ChargeOrbFire` to server so other clients see the orb
-- `generations` table (keyed by cdKey) prevents stale fires when a new charge starts mid-cooldown
-- Listens on `Stunned` / `GuardBroken` attribute changes; calls `ChargeNotifier.cancelled` if interrupted
-- After `chargeTime`: validates character is still alive, then fires the spell remote
+- `generations` table (keyed by `cdKey`) prevents stale fires when a new charge starts mid-cooldown
+- Listens on `Stunned` / `GuardBroken` attribute changes; calls `ChargeNotifier.cancelled` if interrupted. If cancelled by a pending combo (`ComboPending` attribute), skips `ChargeNotifier` so no penalty cooldown is applied.
+- After `chargeTime`: calls `ClientCooldowns.clearPending(cdKey)` then fires the spell remote. Clearing pending before the fire ensures a server reject doesn't leave the slot in grey limbo.
 
 #### Client — `chargeOrbClient.client.luau`
 
@@ -352,11 +391,11 @@ Receives `Combat_ChargeOrbFire`, validates origin proximity (≤ 20 studs from r
 
 ### Cooldowns
 
-**Server:** `server/combat/modules/CooldownManager.luau` · **Client:** `client/combat/ClientCooldowns.luau` + `client/combat/CooldownHUD.client.luau`
+**Server:** `server/combat/modules/CooldownManager.luau` · **Client:** `client/combat/modules/ClientCooldowns.luau` + `client/combat/hud/CooldownHUD.client.luau`
 
 #### Server — `CooldownManager.luau`
 
-Runtime cooldown duration store. Values can be changed at runtime without touching Config (used by `FastCooldowns`). Syncs to clients via `Combat_CooldownSync` on `PlayerAdded`. Snapshots are tagged `_snapshot = true` so the HUD can distinguish a duration update from a spell-fired notification.
+Runtime cooldown and charge-time duration store. Values can be changed at runtime without touching Config (used by `FastCooldowns`). Syncs to clients via `Combat_CooldownSync` on `PlayerAdded`. Snapshots are tagged `_snapshot = true` so the HUD handler can distinguish a duration update from a spell-fired notification.
 
 | Function | Description |
 | :--- | :--- |
@@ -364,22 +403,35 @@ Runtime cooldown duration store. Values can be changed at runtime without touchi
 | `set(name, value)` | Set a runtime override |
 | `reset(name)` | Clear override, revert to default |
 | `resetAll()` | Clear all overrides |
-| `syncAll()` | Fire `Combat_CooldownSync` to all clients |
+| `syncAll()` | Fire `Combat_CooldownSync` snapshot to all clients |
 | `snapshot()` | Returns all current durations (tagged `_snapshot = true`) |
 
-Cooldown names: `"blackFlash"`, `"dash"`, `"dashEndlag"`, `"divergentFistDuration"`, `"divergentFistCooldown"`, `"wizardBeam"`, `"disarmSpell"`, `"chain"`.
+**Cooldown keys:** `"blackFlash"`, `"dash"`, `"dashEndlag"`, `"divergentFistDuration"`, `"divergentFistCooldown"`, `"deathCurse"`, `"disarmSpell"`, `"chain"`, `"comboSpell"`
 
-> [!NOTE]
-> `BLACK_FLASH_COOLDOWN` is commented out in `CombatConfig`. The fallback `or 12` in `CooldownManager` and `ClientCooldowns` is what's active.
+**Charge-time keys** (synced to clients so `FastCooldowns` can reduce them): `"deathCurseCharge"`, `"disarmSpellCharge"`, `"chainCharge"`, `"comboSpellCharge"`
 
 #### Client — `ClientCooldowns.luau`
 
-Client-side cooldown duration store. Initialized from `CombatConfig` defaults. Updates its `values` table when `Combat_CooldownSync` arrives (ignores `_snapshot`-tagged data). Read by all spell clients to gate firing.
+Single source of truth for all client-side cooldown state. Spell scripts gate firing through this module; `CooldownHUD` reads it for visual display.
+
+Two internal tables:
+- `values` — duration defaults; updated when `Combat_CooldownSync` arrives (processes all keys, including `_snapshot`-tagged data)
+- `expiry` — absolute `tick()` when each cooldown expires
+- `pending` — boolean per key; true while a charge is in flight
 
 | Function | Description |
 | :--- | :--- |
-| `get(name)` | Returns cooldown duration |
+| `get(name)` | Returns stored duration value |
 | `getDash()` | Returns `dash + dashEndlag` (total reuse time) |
+| `isReady(key)` | True if expiry has passed AND not pending |
+| `getRemaining(key)` | Seconds until expiry (expiry only, ignores pending) |
+| `startCooldown(key, duration)` | Set `expiry = tick() + duration`; clear pending |
+| `setPending(key)` | Mark a charge as in-flight (blocks `isReady`) |
+| `clearPending(key)` | Unmark in-flight state |
+| `isPending(key)` | Query pending flag (used by HUD for grey display) |
+| `resetAll()` | Zero all expiries and clear all pending (CooldownReset / profile switch) |
+
+`Combat_CooldownSync` listener updates `values` for all received keys.
 
 #### Client — `CooldownHUD.client.luau`
 
@@ -396,18 +448,21 @@ Profile-driven move slot bar anchored bottom-center of the screen. Rebuilds when
 | DF buff active | Teal background + text + border, buff countdown |
 
 **Event sources:**
-- Spell broadcast remotes — start cooldown on confirmed server hit
-- `Combat_CooldownSync` (non-snapshot) — starts cooldown for the dissipate (no-target) case
+- Spell broadcast remotes — call `ClientCooldowns.clearPending` + `startCooldown` on confirmed server hit
+- `Combat_CooldownSync` (non-snapshot) — calls `clearPending` + `startCooldown` for the dissipate (no-target) case
+- `ChargeNotifier.onCancelled` — calls `clearPending` + `startCooldown` when a charge is interrupted
 - `Combat_DivergentFistBroadcast` / `Combat_DivergentFistExpired` — DF buff tracking
-- `Combat_CooldownReset` — zeroes all `cooldownEnd` and `pendingUntil` entries
+- `Combat_CooldownReset` — calls `ClientCooldowns.resetAll()`
 
-On profile switch: `clearSlots()` destroys old frames and zeroes all state. The server also fires `Combat_CooldownReset` after resetting server-side cooldowns to flush any in-flight `CooldownSync`.
+On input: presses while `getRemaining > 0` trigger a red reject flash. Spell clients own `setPending` exclusively — the HUD does not call it.
+
+On profile switch: `clearSlots()` destroys old frames and calls `ClientCooldowns.resetAll()`.
 
 ---
 
 ### Character Profiles
 
-**Shared:** `shared/CharacterProfiles.luau` · **Client:** `client/combat/ActiveProfile.luau` + `client/combat/ProfileSelectorUI.client.luau`
+**Shared:** `shared/CharacterProfiles.luau` · **Client:** `client/combat/modules/ActiveProfile.luau` + `client/combat/ProfileSelectorUI.client.luau`
 
 #### Client — `ActiveProfile.luau`
 
@@ -441,13 +496,14 @@ Entry point. Tags every character and NPC humanoid with a stable `CombatGUID` at
 | `Combat_Dash` | `Dashing.tryDash` |
 | `Combat_BlackFlash` | `BlackFlashSystem.request` |
 | `Combat_DivergentFist` | `DivergentFist.request` |
-| `Combat_WizardBeamFire` | `WizardSystem.fire` |
+| `Combat_DeathCurseFire` | `WizardSystem.fire` |
 | `Combat_DisarmSpellFire` | `DisarmSystem.fire` |
 | `Combat_ChainFire` | `ChainSystem.fire` |
+| `Combat_ComboSpellFire` | `ComboSpellSystem.fire` |
 | `Combat_ChargeOrbFire` | Relay → `Combat_ChargeOrbBroadcast` |
 | `Combat_ProfileSwitch` | Reset all CDs + fire `CooldownReset` to client + kill character |
 
-Cleans up all system state tables on `PlayerRemoving`.
+On `PlayerRemoving`: calls `cleanup` on all system state tables. On `CharacterAdded`: calls `cleanup` (not `resetCooldown`) on spell systems so the new life starts with a clean slate, and clears all lingering combat attributes.
 
 ### `server/combat/Remotes.luau`
 
@@ -479,7 +535,7 @@ Manages all movement and action restrictions. A background coroutine per affecte
 | `applyMovementLock(char, duration)` | Generic movement block |
 | `isHitslow(char)` | Query active hitslow |
 | `isEndlag(char)` | Query any active endlag |
-| `clearAll(char)` | Force-clear everything |
+| `clearAll(char)` | Force-clear all endlag, hitslow, and movement locks |
 
 **Hitslow stacking rules:** Fresh application sets full duration. Extensions add half duration (finisher adds full). Total capped at `HITSTUN_STACK_CAP`.
 
@@ -576,19 +632,21 @@ Server-side visual debug. Pools up to 64 `Part` instances with `SelectionBox` ou
 
 > These scripts use **CollectionService tags** or are parented directly to a Part. Tag the relevant Parts in Studio.
 
-### `server/CooldownRefresh.server.luau`
+### `server/utility/CooldownRefresh.server.luau`
 
 **Tag:** `CooldownRefreshZone`
 
-Touch resets all active cooldowns for the touching player (BF `lastUsed`, DF cooldown, all spell `cooldownEnds`, `dashCDUntil`). Fires `Combat_CooldownReset` to that client so the HUD clears instantly. 1-second debounce per player.
+Touch resets all active cooldowns for the touching player: BF `lastUsed`, DF cooldown, all spell `cooldownEnds` (wizard, disarm, chain, combo), `dashCDUntil`. Also calls `Lockouts.clearAll` on the character to remove any active endlag or hitslow. Fires `Combat_CooldownReset` to that client so the HUD clears instantly. 1-second debounce per player.
 
 **Print:** `[CooldownRefresh] All cooldowns reset for <player>`
 
-### `server/FastCooldowns.server.luau`
+### `server/utility/FastCooldowns.server.luau`
 
-Touch toggles all combat CDs between 0.5s and their Config defaults. Syncs to clients via `Combat_CooldownSync`. Resets all active per-player cooldowns on both toggle directions.
+Touch toggles all combat cooldowns and charge times between fast values and their defaults. **ON:** sets all cooldowns to 0.5s and all charge times (`deathCurseCharge`, `disarmSpellCharge`, `chainCharge`, `comboSpellCharge`) to 0.3s. **OFF:** restores all defaults via `CooldownManager.resetAll()`. Both directions sync to all clients via `CooldownSync` snapshot, reset all active per-player cooldowns, and call `Lockouts.clearAll` on each player's character. 1-second debounce per player.
 
-### `server/Immortality.server.luau`
+**Print:** `[FastCooldowns] ON — all CDs set to 0.5 s` / `[FastCooldowns] OFF — CDs restored`
+
+### `server/utility/Immortality.server.luau`
 
 **Tag:** `ImmortalityZone`
 
@@ -596,7 +654,7 @@ Touch **toggles** invulnerability. On activation: heals to full HP, then hooks `
 
 **Prints:** `[Immortality] ON/OFF — <player>`, `[FullHeal] <player> healed <N> HP`
 
-### `server/InvulnZone.server.luau`
+### `server/utility/InvulnZone.server.luau`
 
 **Tag:** `InvulnZone`
 
@@ -607,7 +665,7 @@ Touch sets or clears the `Invulnerable` attribute based on the Part's `InvulnGiv
 | `true` | Grants `Invulnerable` on touch |
 | absent / `false` | Removes `Invulnerable` on touch |
 
-### `server/FullHeal.server.luau`
+### `server/utility/FullHeal.server.luau`
 
 Script parented directly to a `BasePart`. Touch restores the player to full health. 1-second debounce per player.
 
@@ -619,7 +677,7 @@ Empty script. Rename it to `"WallDaze"` and place it inside a Part — `WallDaze
 
 ## Client — Shared Utilities
 
-### `client/combat/AnimationController.luau`
+### `client/combat/modules/AnimationController.luau`
 
 Manages all combat animation tracks for the local player.
 
@@ -638,7 +696,7 @@ Manages all combat animation tracks for the local player.
 | `forceNeutral()` | Fade out active punch/block |
 | `reset()` | Clear all tracks on respawn |
 
-### `client/combat/SoundEffects.luau`
+### `client/combat/modules/SoundEffects.luau`
 
 Round-robin pool of 10 `Sound` instances parented to the local HumanoidRootPart.
 
@@ -675,13 +733,13 @@ Manages `Highlight` instance lifecycle for hit flashes and arm auras.
 | Wall hit | Red (guard break color) |
 | Divergent Fist delayed hit | Teal |
 
-### `client/combat/M1Buffer.luau`
+### `client/combat/modules/M1Buffer.luau`
 
 Tracks a 0.3s grace window after the `Endlag` attribute clears. `blocked()` returns true while endlag is active OR within the buffer window, preventing spells from firing in the gap between client attribute update and server-side endlag.
 
-### `client/combat/ChargeNotifier.luau`
+### `client/combat/modules/ChargeNotifier.luau`
 
-Lightweight module-level signal. `SpellCharge` calls `cancelled(cdKey, duration)` when a charge is interrupted mid-way (stunned/guard-broken). `CooldownHUD` listens via `onCancelled` to immediately start the real cooldown timer without waiting for a server broadcast.
+Lightweight module-level signal. `SpellCharge` calls `cancelled(cdKey, duration)` when a charge is interrupted mid-way (stunned/guard-broken). `CooldownHUD` listens via `onCancelled` to immediately call `clearPending` + `startCooldown` without waiting for a server broadcast. Not called when a charge is silently cancelled by a combo (`comboCancelled = true`).
 
 ### `client/combat/CameraClamp.client.luau`
 
@@ -701,6 +759,7 @@ Enforces `CAMERA_MIN_ZOOM` (5) and `CAMERA_MAX_ZOOM` (18) via `player.CameraMinZ
 | 1 | Death Curse (Wizard Beam) | Spellslinger |
 | 2 | Disarm Spell | Spellslinger |
 | 3 | Chain | Spellslinger |
+| 2 + 3 (within window) | Combo Spell | Spellslinger |
 
 ---
 
@@ -716,23 +775,25 @@ All created and ensured by `server/combat/Remotes.luau`.
 | `Combat_Dash` | C → S | Request dash (Vector3 direction) |
 | `Combat_BlackFlash` | C → S | Request Black Flash |
 | `Combat_DivergentFist` | C → S | Request Divergent Fist buff |
-| `Combat_WizardBeamFire` | C → S | Fire Death Curse after charge |
+| `Combat_DeathCurseFire` | C → S | Fire Death Curse after charge |
 | `Combat_DisarmSpellFire` | C → S | Fire Disarm Spell after charge |
 | `Combat_ChainFire` | C → S | Fire Chain after charge |
+| `Combat_ComboSpellFire` | C → S | Fire Combo Spell after charge |
 | `Combat_ChargeOrbFire` | C → S | Notify server of local charge orb (for relay) |
 | `Combat_ProfileSwitch` | C → S | Switch active character profile |
 | `Combat_PunchBroadcast` | S → All | Notify all clients of a punch (attacker, index) |
 | `Combat_HitFeedback` | S → All | Hit result for VFX/audio (type, target, attacker, blocked, divFist) |
 | `Combat_Reaction` | S → All | Force reaction animation on a target |
 | `Combat_Knockback` | S → Target | Send knockback velocity vector to target's client |
-| `Combat_BlackFlashBroadcast` | S → All | Black Flash windup + hit feedback (lightning cone, screen flash) |
+| `Combat_BlackFlashBroadcast` | S → All | Black Flash windup + hit feedback |
 | `Combat_DivergentFistBroadcast` | S → All | DF buff active (attacker, duration) |
 | `Combat_DivergentFistExpired` | S → All | DF buff expired; start cooldown |
-| `Combat_WizardBeamBroadcast` | S → All | Render Death Curse beam (startPos, endPos) |
+| `Combat_DeathCurseBroadcast` | S → All | Render Death Curse beam (startPos, endPos) |
 | `Combat_DisarmSpellBroadcast` | S → All | Render Disarm beam + trigger swirl |
-| `Combat_ChainBroadcast` | S → All | Render Chain beam; bounces via `Combat_HitFeedback` type `"ChainBounce"` |
+| `Combat_ChainBroadcast` | S → All | Render Chain beam; bounces via `HitFeedback` type `"ChainBounce"` |
+| `Combat_ComboSpellBroadcast` | S → All | Render initial Combo Spell beam (startPos, endPos) |
 | `Combat_ChargeOrbBroadcast` | S → All | Show remote charge orb on all other clients |
-| `Combat_CooldownSync` | S → One/All | Cooldown durations (tagged `_snapshot`) or spell-fired notification |
+| `Combat_CooldownSync` | S → One/All | Cooldown + charge-time durations (tagged `_snapshot`) or spell-fired notification |
 | `Combat_CooldownReset` | S → One | Reset all active client-side cooldown timers and pending state |
 
 ---
@@ -752,7 +813,8 @@ Set on the character `Model` by the server; read by both server and client.
 | `Posture` | number | Current posture value (0–max) |
 | `Invulnerable` | bool | Combat system skips all hits |
 | `Disarmed` | bool | Cannot use any special moves |
-| `Chained` | bool | Movement locked by Chain spell; WalkSpeed = 0 |
+| `Chained` | bool | Movement locked by Chain or Combo Spell; WalkSpeed = 0 |
+| `ComboPending` | bool | Set briefly by Combo Spell client to signal disarm/chain charges to cancel silently |
 | `BlockSuppressUntil` | number | Server timestamp; block raise blocked until this time |
 | `PunchLockUntil` | number | Server timestamp; punches blocked until this time |
 | `NPC_Controlled` | bool | Marks models managed by npcController |
